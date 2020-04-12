@@ -122,7 +122,7 @@ class LDA():
             gamma[d] = self.alpha + nb_words_doc / self.nb_topics
 
         #EM algorithm
-        while (not has_converged and (max_iter is None or nb_iter < max_iter)):
+        while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
 
             print("Iteration:", nb_iter)
             likelihood = 0
@@ -150,6 +150,8 @@ class LDA():
                     #Normalizing multinomials
                     if np.sum(self.beta[k]) > 0:
                         self.beta[k] /= np.sum(self.beta[k])
+
+            print(self.beta)
 
             #Estimating alpha with Newton-Raphson
             # TO DO
@@ -184,18 +186,18 @@ class LDA():
         _, nb_d_words_doc = self.nb_terms_doc(doc_idx)
 
         #Now estimating gamma and phi
-        while not has_converged and ((max_iter is None) or (nb_iter < max_iter)):
+        while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
             print("Iteration", nb_iter, "of variational parameters estimation")
             for i in range(nb_d_words_doc):
                 for j in range(self.nb_topics):
                     word_index = self.bow[doc_idx][i][0]
-                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j]))
+                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j])) #- digamma(np.sum(gamma_doc)))
                 if np.sum(phi[i]) > 0:
                     phi[i] /= (np.sum(phi[i]))
-            sum_phi = np.zeros(self.nb_topics)
-            for i in range(nb_d_words_doc):
-                sum_phi += phi[i]
-            gamma_doc = self.alpha + sum_phi
+            for i in range(self.nb_topics):
+                gamma_doc[i] += self.alpha
+                for j in range(nb_d_words_doc):
+                    gamma_doc[i] += phi[j][i]
 
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
             print(likelihood)
@@ -257,7 +259,7 @@ if __name__ == "__main__":
 
     pp = Preprocessing()
 
-    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:200]))
+    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:100]))
 
     lda = LDA(5, bow, index, alpha=1, set_alpha=True)
 
