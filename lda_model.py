@@ -66,11 +66,18 @@ class LDA():
         #Beta parameter as described in paper, a k x V matrix with :
         #   - k topics
         #   - V words
-        self.beta = np.zeros(shape=(nb_topics, self.nb_terms))
+        self.beta = np.ones(shape=(nb_topics, self.nb_terms))
 
         #Variational parameters
         self.gamma = None
         self.phi = None
+
+        #Keeping bow in dictionnary form for checking presence of indexes
+        self.bow_dict = {}
+
+        for d in range(self.nb_docs):
+
+            self.bow_dict[d] = dict(self.bow[d])
 
 
     def nb_terms_doc(self, doc_idx):
@@ -88,8 +95,7 @@ class LDA():
         Check if the word of id word_id is in the document
         of id doc_idx
         """
-        dic = dict(self.bow[doc_idx])
-        return word_id in dic
+        return word_id in self.bow_dict[doc_idx]
             
 
     def estimation(self, em_threshold=10e-5, e_threshold=10e-8, max_iter=None):
@@ -128,7 +134,7 @@ class LDA():
                 if (d % 1000 == 0):
                     print("E-step through", d, "documents")
 
-                likelihood += self.inference_doc(d, gamma[d], phi[d], conv=e_threshold)
+                likelihood += self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=200)
 
             #Maximization of the expectation : maximize lower bound of the log likelihood of the variational distribution
             print("M-Step")
@@ -144,8 +150,6 @@ class LDA():
                     #Normalizing multinomials
                     if np.sum(self.beta[k]) > 0:
                         self.beta[k] /= np.sum(self.beta[k])
-
-            print(np.max(self.beta))
 
             #Estimating alpha with Newton-Raphson
             # TO DO
@@ -196,10 +200,10 @@ class LDA():
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
             print(likelihood)
 
-            if nb_iter > 0:
-                diff = (prev_likelihood - likelihood) / prev_likelihood
-                if diff < conv:
-                    has_converged = True
+            #if nb_iter > 0:
+            #    diff = (prev_likelihood - likelihood) / prev_likelihood
+            #    if diff < conv:
+            #        has_converged = True
                 
             prev_likelihood = likelihood
 
@@ -212,14 +216,20 @@ class LDA():
         """
         Computation of the likelihood lower bound as described in the paper
         """
-        term_1 = loggamma(np.sum(self.alpha)) - np.sum(loggamma(self.alpha)) +\
-            np.sum((self.alpha - 1) * (digamma(gamma_doc)) - digamma(np.sum(gamma_doc)))
+        #Saving computations with recurrent terms
+        dig_gamma = digamma(gamma_doc)
+        dig_gamma_sum = digamma(np.sum(gamma_doc))
+
+        term_1 = loggamma(self.alpha) - loggamma(self.alpha) +\
+            np.sum((self.alpha - 1) * dig_gamma - dig_gamma_sum)
 
         term_2 = 0.0
 
         for i in range(nb_d_words_doc):
             for j in range(self.nb_topics):
-                term_2 += phi[i][j] * (digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc)))
+                term_2 += phi[i][j] * (dig_gamma[j] - dig_gamma_sum)
+
+        term_2 = np.sum(term_2)
 
         term_3 = 0.0
 
@@ -230,14 +240,9 @@ class LDA():
                         term_3 += phi[i][j] * np.log(self.beta[j][k])
 
         term_4 = loggamma(np.sum(gamma_doc)) + np.sum(loggamma(gamma_doc)) -\
-            np.sum((gamma_doc - 1) * (digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc))))
+            np.sum((gamma_doc - 1) * (digamma(gamma_doc) - digamma(np.sum(gamma_doc))))
 
-        term_5 = 0.0
-
-        for i in range(nb_d_words_doc):
-            for j in range(self.nb_topics):
-                if phi[i][j] != 0:
-                    term_5 += phi[i][j] * np.log(phi[i][j])
+        term_5 = np.sum(np.where(phi <= 0, 0, phi * np.log(phi)))
 
         return term_1 + term_2 + term_3 - term_4 - term_5
 
@@ -252,8 +257,8 @@ if __name__ == "__main__":
 
     pp = Preprocessing()
 
-    index, bow = pp.build_bow(pp.corpus_preproc(train["data"]))
+    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:200]))
 
-    lda = LDA(5, bow, index, alpha=50, set_alpha=True)
+    lda = LDA(5, bow, index, alpha=1, set_alpha=True)
 
     lda.estimation()
