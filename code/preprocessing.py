@@ -69,4 +69,5 @@ if __name__ == '__main__':
     print(proc_corpus[20:23])
     d, bow = pp.build_bow(proc_corpus)
     print(d)
+    print(len(d.token2id))
     print(bow[20])
