@@ -13,7 +13,7 @@ authors :
 """
 import numpy as np
 from preprocessing import Preprocessing
-from scipy.special import digamma, loggamma
+from scipy.special import digamma, loggamma, polygamma
 
 class LDA():
     """
@@ -98,7 +98,7 @@ class LDA():
         return word_id in self.bow_dict[doc_idx]
             
 
-    def estimation(self, em_threshold=10e-5, e_threshold=10e-8, max_iter=None):
+    def estimation(self, em_threshold=1e-5, e_threshold=1e-8, max_iter=None):
         """
         Estimation of the alpha and beta parameters of the LDA model
         Uses a EM algorithm which functions the following way :
@@ -109,20 +109,20 @@ class LDA():
         has_converged = False 
         nb_iter = 0
 
-        #Initializing variational parameters
-        gamma = np.zeros((self.nb_docs, self.nb_topics))
-        phi = np.zeros((self.nb_docs, self.doc_max_length, self.nb_topics))
-        
-        for d in range(self.nb_docs):
-            #total count of words inside document
-            #and total count of distinct words inside document
-            nb_words_doc, nb_d_words_doc = self.nb_terms_doc(d)
-            for n in range(nb_d_words_doc):
-                phi[d][n] = 1 / self.nb_topics
-            gamma[d] = self.alpha + nb_words_doc / self.nb_topics
-
         #EM algorithm
         while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
+
+            #Initializing variational parameters
+            gamma = np.zeros((self.nb_docs, self.nb_topics))
+            phi = np.zeros((self.nb_docs, self.doc_max_length, self.nb_topics))
+        
+            for d in range(self.nb_docs):
+                #total count of words inside document
+                #and total count of distinct words inside document
+                nb_words_doc, nb_d_words_doc = self.nb_terms_doc(d)
+                for n in range(nb_d_words_doc):
+                    phi[d][n] = 1 / self.nb_topics
+                gamma[d] = self.alpha + nb_words_doc / self.nb_topics
 
             print("Iteration:", nb_iter)
             likelihood = 0
@@ -134,7 +134,9 @@ class LDA():
                 if (d % 1000 == 0):
                     print("E-step through", d, "documents")
 
-                likelihood += self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=200)
+                ll, _, _ = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=None)
+
+                likelihood += ll
 
             #Maximization of the expectation : maximize lower bound of the log likelihood of the variational distribution
             print("M-Step")
@@ -154,7 +156,7 @@ class LDA():
             print(self.beta)
 
             #Estimating alpha with Newton-Raphson
-            # TO DO
+            self.alpha = self.nr_alpha(self.nb_docs, self.nb_topics, gamma)
 
             if (nb_iter > 0):
                 diff = (prev_likelihood - likelihood) / prev_likelihood
@@ -173,6 +175,41 @@ class LDA():
         return self.beta, gamma, phi
 
 
+    def nr_alpha(self, nb_docs, nb_topics, gamma):
+        """
+        Linear time Newton-Raphson algorithm as described in the paper
+        Used to optimize the alpha parameter, the parameter of the dirichlet
+        distribution used to generate topic proportions per document.
+
+        The advantage of this implementation of N-R is that it functions in
+        linear time
+        """
+        init_a = 100
+        nb_iter = 0
+
+        log_a = np.log(init_a)
+        df = nb_docs * nb_topics * (polygamma(1, init_a * nb_topics) - polygamma(1, init_a)) + np.sum(digamma(gamma) - np.repeat(digamma(np.sum(gamma, axis=1)).reshape(-1, 1), nb_topics, 1))
+        d2f = nb_docs * (nb_topics ** 2 * polygamma(2, nb_topics * init_a) - nb_topics * polygamma(2, init_a))
+
+        while (np.abs(df) > 1e-5 and nb_iter < 1000):
+
+            log_a = log_a - df / (d2f * self.alpha + df)
+
+            a = np.exp(log_a)
+            if (np.isnan(a)):
+                print("alpha is NaN, time to reboot it")
+                init_a *= 10
+                a = init_a
+                log_a = np.log(a)
+
+            df = nb_docs * nb_topics * (polygamma(1, a * nb_topics) - polygamma(1, a)) + np.sum(digamma(gamma) - np.repeat(digamma(np.sum(gamma, axis=1)).reshape(-1, 1), nb_topics, 1))
+            d2f = nb_docs * (nb_topics ** 2 * polygamma(2, nb_topics * a) - nb_topics * polygamma(2, a))
+
+            nb_iter += 1
+
+        print("new alpha is :", np.exp(a))
+        return np.exp(log_a)
+
     def inference_doc(self, doc_idx, gamma_doc, phi, conv=10e-8, max_iter=None):
         """
         Variational inference algorithm described in the paper
@@ -187,31 +224,26 @@ class LDA():
 
         #Now estimating gamma and phi
         while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
-            print("Iteration", nb_iter, "of variational parameters estimation")
             for i in range(nb_d_words_doc):
                 for j in range(self.nb_topics):
                     word_index = self.bow[doc_idx][i][0]
-                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j])) #- digamma(np.sum(gamma_doc)))
-                if np.sum(phi[i]) > 0:
-                    phi[i] /= (np.sum(phi[i]))
-            for i in range(self.nb_topics):
-                gamma_doc[i] += self.alpha
-                for j in range(nb_d_words_doc):
-                    gamma_doc[i] += phi[j][i]
+                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc)))
+            gamma_doc = self.alpha + np.sum(phi, axis=0)
 
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
-            print(likelihood)
 
-            #if nb_iter > 0:
-            #    diff = (prev_likelihood - likelihood) / prev_likelihood
-            #    if diff < conv:
-            #        has_converged = True
+            if nb_iter > 0:
+                diff = (prev_likelihood - likelihood) / prev_likelihood
+                if diff < conv:
+                    has_converged = True
                 
             prev_likelihood = likelihood
 
             nb_iter += 1
 
-        return likelihood
+        print("document", doc_idx, "likelihood", likelihood)
+
+        return likelihood, phi, gamma_doc
 
 
     def likelihood(self, doc_idx, nb_d_words_doc, gamma_doc, phi):
@@ -261,6 +293,8 @@ if __name__ == "__main__":
 
     index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:100]))
 
-    lda = LDA(5, bow, index, alpha=1, set_alpha=True)
+    lda = LDA(10, bow, index, alpha=1, set_alpha=True)
+
+    print(lda.nb_terms)
 
     lda.estimation()
