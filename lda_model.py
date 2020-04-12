@@ -12,6 +12,7 @@ authors :
     - Luqman Ferdjani
 """
 import numpy as np
+from preprocessing import Preprocessing
 from scipy.special import digamma, loggamma
 
 class LDA():
@@ -42,17 +43,16 @@ class LDA():
         #If the user decides to set alpha we take their value
         #Else we set a uniform prior over topic distribution 
         if set_alpha:
-            assert alpha.shape[0] == nb_topics
             self.alpha = alpha
         else:
-            self.alpha = np.ones(shape=nb_topics)
+            self.alpha = 1
 
         #Computing maximum number of unique terms inside a document
         #Necessary for allocation of the variational parameter phi
         maximum = 0
 
         for b in bow:
-            if len(b) > max:
+            if len(b) > maximum:
                 maximum = len(b)
 
         self.doc_max_length = maximum
@@ -88,11 +88,11 @@ class LDA():
         Check if the word of id word_id is in the document
         of id doc_idx
         """
-        dic = dict(self.bow)
+        dic = dict(self.bow[doc_idx])
         return word_id in dic
             
 
-    def estimation(self, em_threshold=10e-5, max_iter=None):
+    def estimation(self, em_threshold=10e-5, e_threshold=10e-8, max_iter=None):
         """
         Estimation of the alpha and beta parameters of the LDA model
         Uses a EM algorithm which functions the following way :
@@ -102,7 +102,6 @@ class LDA():
         """
         has_converged = False 
         nb_iter = 0
-        prev_likelihood = 1
 
         #Initializing variational parameters
         gamma = np.zeros((self.nb_docs, self.nb_topics))
@@ -126,29 +125,39 @@ class LDA():
             print("E-Step")
 
             for d in range(self.nb_docs):
+                if (d % 1000 == 0):
+                    print("E-step through", d, "documents")
 
-                likelihood += self.inference_doc(d, gamma[d], phi[d])
+                likelihood += self.inference_doc(d, gamma[d], phi[d], conv=e_threshold)
 
             #Maximization of the expectation : maximize lower bound of the log likelihood of the variational distribution
             print("M-Step")
 
             #Estimating beta
             for d in range(self.nb_docs):
+                _, nb_d_words_doc = self.nb_terms_doc(d)
                 for k in range(self.nb_topics):
                     for v in range(self.nb_terms):
                         if self.check_word_id_in_doc(v, d):
-                            self.beta[k][v] = phi[d][v][k]
+                            for n in range(nb_d_words_doc):
+                                self.beta[k][v] += phi[d][n][k]
                     #Normalizing multinomials
-                    self.beta[k] /= np.sum(self.beta[k])
+                    if np.sum(self.beta[k]) > 0:
+                        self.beta[k] /= np.sum(self.beta[k])
+
+            print(np.max(self.beta))
 
             #Estimating alpha with Newton-Raphson
-
             # TO DO
 
-            diff = (prev_likelihood - likelihood) / prev_likelihood
+            if (nb_iter > 0):
+                diff = (prev_likelihood - likelihood) / prev_likelihood
+                if diff < em_threshold:
+                    has_converged = True
 
-            if diff < em_threshold:
-                has_converged = True
+            prev_likelihood = likelihood
+
+            print("iteraton", nb_iter, likelihood)
 
             nb_iter += 1
 
@@ -167,7 +176,6 @@ class LDA():
         :param doc_id: int, index of the document on which to perform
         """
         has_converged = False
-        prev_likelihood = 1
         nb_iter = 0
         _, nb_d_words_doc = self.nb_terms_doc(doc_idx)
 
@@ -177,21 +185,23 @@ class LDA():
             for i in range(nb_d_words_doc):
                 for j in range(self.nb_topics):
                     word_index = self.bow[doc_idx][i][0]
-                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[i]))
-                phi[i] /= (np.sum(phi[i]))
+                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j]))
+                if np.sum(phi[i]) > 0:
+                    phi[i] /= (np.sum(phi[i]))
             sum_phi = np.zeros(self.nb_topics)
             for i in range(nb_d_words_doc):
                 sum_phi += phi[i]
             gamma_doc = self.alpha + sum_phi
 
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
+            print(likelihood)
 
-            diff = (prev_likelihood - likelihood) / prev_likelihood
+            if nb_iter > 0:
+                diff = (prev_likelihood - likelihood) / prev_likelihood
+                if diff < conv:
+                    has_converged = True
+                
             prev_likelihood = likelihood
-
-            if diff < conv:
-
-                has_converged = True
 
             nb_iter += 1
 
@@ -205,28 +215,45 @@ class LDA():
         term_1 = loggamma(np.sum(self.alpha)) - np.sum(loggamma(self.alpha)) +\
             np.sum((self.alpha - 1) * (digamma(gamma_doc)) - digamma(np.sum(gamma_doc)))
 
-        term_2 = 0
+        term_2 = 0.0
 
         for i in range(nb_d_words_doc):
             for j in range(self.nb_topics):
-                term_2 += phi[i][j] * (digamma(gamma_doc) - digamma(np.sum(gamma_doc)))
+                term_2 += phi[i][j] * (digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc)))
 
-        term_3 = 0
+        term_3 = 0.0
 
         for i in range(nb_d_words_doc):
             for j in range(self.nb_topics):
                 for k in range(self.nb_terms):
-                    if self.check_word_id_in_doc(k, doc_idx):
+                    if self.check_word_id_in_doc(k, doc_idx) and self.beta[j][k] != 0:
                         term_3 += phi[i][j] * np.log(self.beta[j][k])
 
         term_4 = loggamma(np.sum(gamma_doc)) + np.sum(loggamma(gamma_doc)) -\
-            np.sum((gamma_doc - 1) * (digamma(gamma_doc) - digamma(np.sum(gamma_doc))))
+            np.sum((gamma_doc - 1) * (digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc))))
 
-        term_5 = 0
+        term_5 = 0.0
 
         for i in range(nb_d_words_doc):
             for j in range(self.nb_topics):
-                term_5 += phi[i][j] * np.log(phi[i][j])
+                if phi[i][j] != 0:
+                    term_5 += phi[i][j] * np.log(phi[i][j])
 
         return term_1 + term_2 + term_3 - term_4 - term_5
 
+
+if __name__ == "__main__":
+    """
+    Example of application using newsgroups
+    """
+    from sklearn.datasets import fetch_20newsgroups
+
+    train = fetch_20newsgroups(subset='test', remove=('headers', 'footers', 'quotes'))
+
+    pp = Preprocessing()
+
+    index, bow = pp.build_bow(pp.corpus_preproc(train["data"]))
+
+    lda = LDA(5, bow, index, alpha=50, set_alpha=True)
+
+    lda.estimation()
