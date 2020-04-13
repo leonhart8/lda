@@ -67,8 +67,12 @@ if __name__ == '__main__':
     pp = Preprocessing()
     newsgroups = fetch_20newsgroups() # raw data
     proc_corpus = pp.corpus_preproc(newsgroups["data"]) # preprocess it
+    print("Examples of preprocessed texts :")
     print(proc_corpus[20:23])
     d, bow = pp.build_bow(proc_corpus)
+    print("The index :")
     print(d)
+    print("Number of distinct words in corpus :")
     print(len(d.token2id))
+    print("Example of a bag of words :")
     print(bow[20])
