@@ -165,7 +165,7 @@ class LDA():
 
             prev_likelihood = likelihood
 
-            print("iteraton", nb_iter, likelihood)
+            #print("iteraton", nb_iter, likelihood)
 
             nb_iter += 1
 
