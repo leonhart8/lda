@@ -64,8 +64,8 @@ if __name__ == '__main__':
     """
     from sklearn.datasets import fetch_20newsgroups
     pp = Preprocessing()
-    newsgroups = fetch_20newsgroups()
-    proc_corpus = pp.corpus_preproc(newsgroups["data"])
+    newsgroups = fetch_20newsgroups() # raw data
+    proc_corpus = pp.corpus_preproc(newsgroups["data"]) # preprocess it
     print(proc_corpus[20:23])
     d, bow = pp.build_bow(proc_corpus)
     print(d)

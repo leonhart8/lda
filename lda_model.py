@@ -18,10 +18,10 @@ from scipy.special import digamma, loggamma, polygamma
 class LDA():
     """
     Class which encapsulates all information relevant to Latent Dirichlet Allocation.
-    Can be fitted to collection of documents which are summarized by their word
+    Can be fitted to a collection of documents which are summarized by their word
     occurrences.
     Uses variational methods to estimate parameters linked to topic and
-    word distribtions and uses these and for inference
+    word distribtions and uses these and for inference.
     """
 
 
@@ -82,7 +82,12 @@ class LDA():
 
     def nb_terms_doc(self, doc_idx):
         """
-        Counts the number of terms inside a document
+        Count the number of terms inside a document.
+        
+        :param doc_idx: int, index of the document in `bow`.
+        
+        :return: cpt_words: int, total number of words in the document.
+                 cpt_d_words : int, number of different words in the document.
         """
         cpt_words, cpt_d_words =  0, len(self.bow[doc_idx])
         for t in self.bow[doc_idx]:
@@ -92,8 +97,8 @@ class LDA():
 
     def check_word_id_in_doc(self, word_id, doc_idx):
         """
-        Check if the word of id word_id is in the document
-        of id doc_idx
+        Check if the word of id `word_id` is in the document
+        of id `doc_idx`.
         """
         return word_id in self.bow_dict[doc_idx]
             
@@ -165,7 +170,11 @@ class LDA():
 
             prev_likelihood = likelihood
 
+<<<<<<< HEAD
             #print("iteraton", nb_iter, likelihood)
+=======
+            print("iteration", nb_iter, likelihood)
+>>>>>>> c2a8cf8256a4f7ce7e872d6a560fc019256b2fb7
 
             nb_iter += 1
 
@@ -182,7 +191,7 @@ class LDA():
         distribution used to generate topic proportions per document.
 
         The advantage of this implementation of N-R is that it functions in
-        linear time
+        linear time.
         """
         init_a = 100
         nb_iter = 0
