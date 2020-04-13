@@ -13,7 +13,7 @@ authors :
 """
 import numpy as np
 from preprocessing import Preprocessing
-from scipy.special import digamma, loggamma, polygamma
+from scipy.special import digamma, loggamma, polygamma, logsumexp
 
 class LDA():
     """
@@ -66,18 +66,16 @@ class LDA():
         #Beta parameter as described in paper, a k x V matrix with :
         #   - k topics
         #   - V words
-        self.beta = np.ones(shape=(nb_topics, self.nb_terms))
+        self.beta = np.zeros(shape=(nb_topics, self.nb_terms))
 
         #Variational parameters
         self.gamma = None
         self.phi = None
 
-        #Keeping bow in dictionnary form for checking presence of indexes
-        self.bow_dict = {}
-
-        for d in range(self.nb_docs):
-
-            self.bow_dict[d] = dict(self.bow[d])
+        #Sufficient statistics
+        self.topic_tot = np.zeros(self.nb_topics)
+        self.topic_word = np.zeros((self.nb_topics, self.nb_terms))
+        self.alpha_stat = 0
 
 
     def nb_terms_doc(self, doc_idx):
@@ -93,14 +91,6 @@ class LDA():
         for t in self.bow[doc_idx]:
             cpt_words += t[1]
         return cpt_words, cpt_d_words
-
-
-    def check_word_id_in_doc(self, word_id, doc_idx):
-        """
-        Check if the word of id `word_id` is in the document
-        of id `doc_idx`.
-        """
-        return word_id in self.bow_dict[doc_idx]
             
 
     def estimation(self, em_threshold=1e-5, e_threshold=1e-8, max_iter=None):
@@ -114,23 +104,19 @@ class LDA():
         has_converged = False 
         nb_iter = 0
 
+        #Initializing variational parameters
+        gamma = np.zeros((self.nb_docs, self.nb_topics))
+        phi = np.zeros((self.nb_docs, self.doc_max_length, self.nb_topics))
+
         #EM algorithm
         while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
 
-            #Initializing variational parameters
-            gamma = np.zeros((self.nb_docs, self.nb_topics))
-            phi = np.zeros((self.nb_docs, self.doc_max_length, self.nb_topics))
-        
-            for d in range(self.nb_docs):
-                #total count of words inside document
-                #and total count of distinct words inside document
-                nb_words_doc, nb_d_words_doc = self.nb_terms_doc(d)
-                for n in range(nb_d_words_doc):
-                    phi[d][n] = 1 / self.nb_topics
-                gamma[d] = self.alpha + nb_words_doc / self.nb_topics
-
             print("Iteration:", nb_iter)
             likelihood = 0
+
+            self.topic_tot = np.zeros(self.nb_topics)
+            self.topic_word = np.zeros((self.nb_topics, self.nb_terms))
+            self.alpha_stat = 0
 
             #Expectation computation part : optimization of the variational parameters
             print("E-Step")
@@ -146,35 +132,26 @@ class LDA():
             #Maximization of the expectation : maximize lower bound of the log likelihood of the variational distribution
             print("M-Step")
 
-            #Estimating beta
-            for d in range(self.nb_docs):
-                _, nb_d_words_doc = self.nb_terms_doc(d)
-                for k in range(self.nb_topics):
-                    for v in range(self.nb_terms):
-                        if self.check_word_id_in_doc(v, d):
-                            for n in range(nb_d_words_doc):
-                                self.beta[k][v] += phi[d][n][k]
-                    #Normalizing multinomials
-                    if np.sum(self.beta[k]) > 0:
-                        self.beta[k] /= np.sum(self.beta[k])
+            for i in range(self.nb_topics):
+                for j in range(self.nb_terms):
+                    if self.topic_word[i][j] > 0:
+                        self.beta[i][j] = np.log(self.topic_word[i][j]) - np.log(self.topic_tot[i])
+                    else:
+                        self.beta[i][j] = -100
 
-            print(self.beta)
+            print(np.exp(self.beta))
 
             #Estimating alpha with Newton-Raphson
-            self.alpha = self.nr_alpha(self.nb_docs, self.nb_topics, gamma)
+            #self.alpha = self.nr_alpha()
 
             if (nb_iter > 0):
-                diff = (prev_likelihood - likelihood) / prev_likelihood
+                diff = np.abs((prev_likelihood - likelihood))
                 if diff < em_threshold:
                     has_converged = True
 
             prev_likelihood = likelihood
 
-<<<<<<< HEAD
-            #print("iteraton", nb_iter, likelihood)
-=======
             print("iteration", nb_iter, likelihood)
->>>>>>> c2a8cf8256a4f7ce7e872d6a560fc019256b2fb7
 
             nb_iter += 1
 
@@ -184,7 +161,7 @@ class LDA():
         return self.beta, gamma, phi
 
 
-    def nr_alpha(self, nb_docs, nb_topics, gamma):
+    def nr_alpha(self):
         """
         Linear time Newton-Raphson algorithm as described in the paper
         Used to optimize the alpha parameter, the parameter of the dirichlet
@@ -197,8 +174,8 @@ class LDA():
         nb_iter = 0
 
         log_a = np.log(init_a)
-        df = nb_docs * nb_topics * (polygamma(1, init_a * nb_topics) - polygamma(1, init_a)) + np.sum(digamma(gamma) - np.repeat(digamma(np.sum(gamma, axis=1)).reshape(-1, 1), nb_topics, 1))
-        d2f = nb_docs * (nb_topics ** 2 * polygamma(2, nb_topics * init_a) - nb_topics * polygamma(2, init_a))
+        df = self.nb_docs * (self.nb_topics * digamma(self.nb_topics * init_a) - self.nb_topics * digamma(init_a)) + self.alpha_stat
+        d2f = self.nb_docs * ((self.nb_topics ** 2) * polygamma(2, self.nb_topics * init_a) - self.nb_topics * polygamma(2, init_a))
 
         while (np.abs(df) > 1e-5 and nb_iter < 1000):
 
@@ -211,12 +188,12 @@ class LDA():
                 a = init_a
                 log_a = np.log(a)
 
-            df = nb_docs * nb_topics * (polygamma(1, a * nb_topics) - polygamma(1, a)) + np.sum(digamma(gamma) - np.repeat(digamma(np.sum(gamma, axis=1)).reshape(-1, 1), nb_topics, 1))
-            d2f = nb_docs * (nb_topics ** 2 * polygamma(2, nb_topics * a) - nb_topics * polygamma(2, a))
+            df = self.nb_docs * (self.nb_topics * digamma(self.nb_topics * a) - self.nb_topics * digamma(a)) + self.alpha_stat
+            d2f = self.nb_docs * ((self.nb_topics ** 2) * polygamma(2, self.nb_topics * a) - self.nb_topics * polygamma(2, a))
 
             nb_iter += 1
 
-        print("new alpha is :", np.exp(a))
+        print("new alpha is :", np.exp(log_a))
         return np.exp(log_a)
 
     def inference_doc(self, doc_idx, gamma_doc, phi, conv=10e-8, max_iter=None):
@@ -230,19 +207,42 @@ class LDA():
         has_converged = False
         nb_iter = 0
         _, nb_d_words_doc = self.nb_terms_doc(doc_idx)
+        phi_prev = np.zeros(self.nb_topics)
+
+        #Initializing variational parameters
+        #total count of words inside document
+        #and total count of distinct words inside document
+        nb_words_doc, nb_d_words_doc = self.nb_terms_doc(doc_idx)
+        for n in range(nb_d_words_doc):
+            phi[n, :] = 1 / self.nb_topics
+        gamma_doc[:] = self.alpha + nb_words_doc / self.nb_topics
+
+        dig_gamma = digamma(gamma_doc)
 
         #Now estimating gamma and phi
         while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
+
             for i in range(nb_d_words_doc):
+                phisum = 0
                 for j in range(self.nb_topics):
-                    word_index = self.bow[doc_idx][i][0]
-                    phi[i][j] = self.beta[j][word_index] * np.exp(digamma(gamma_doc[j]) - digamma(np.sum(gamma_doc)))
-            gamma_doc = self.alpha + np.sum(phi, axis=0)
+                    phi_prev[j] = phi[i][j]
+                    phi[i][j] = dig_gamma[j] + self.beta[j][self.bow[doc_idx][i][0]]
+                    if j > 0:
+                        phisum = logsumexp(np.array([phisum, phi[i][j]]))
+                    else:
+                        phisum = phi[i][j]
+
+                for j in range(self.nb_topics):
+                    phi[i][j] = np.exp(phi[i][j] - phisum)
+                    gamma_doc[j] += self.bow[doc_idx][i][1] * (phi[i][j] - phi_prev[j])
+                    dig_gamma[j] = digamma(gamma_doc[j])
 
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
 
+            print("document", doc_idx, "likelihood", likelihood, "nb_iter", nb_iter)
+
             if nb_iter > 0:
-                diff = (prev_likelihood - likelihood) / prev_likelihood
+                diff = np.abs((prev_likelihood - likelihood))
                 if diff < conv:
                     has_converged = True
                 
@@ -250,7 +250,14 @@ class LDA():
 
             nb_iter += 1
 
-        print("document", doc_idx, "likelihood", likelihood)
+        #Sufficient statistics update
+        self.alpha_stat += (np.sum(digamma(gamma_doc)))
+        self.alpha_stat -= self.nb_topics * digamma(np.sum(gamma_doc))
+
+        for i in range(nb_d_words_doc):
+            for j in range(self.nb_topics):
+                self.topic_word[j][self.bow[doc_idx][i][0]] += phi[i][j] * self.bow[doc_idx][i][1]
+                self.topic_tot[j] += self.bow[doc_idx][i][1] * phi[i][j]
 
         return likelihood, phi, gamma_doc
 
@@ -259,35 +266,26 @@ class LDA():
         """
         Computation of the likelihood lower bound as described in the paper
         """
+        likelihood = 0.0
+        
         #Saving computations with recurrent terms
         dig_gamma = digamma(gamma_doc)
-        dig_gamma_sum = digamma(np.sum(gamma_doc))
+        gamma_sum = np.sum(gamma_doc)
+        dig_gamma_sum = digamma(gamma_sum)
 
-        term_1 = loggamma(self.alpha) - loggamma(self.alpha) +\
-            np.sum((self.alpha - 1) * dig_gamma - dig_gamma_sum)
+        likelihood = loggamma(self.alpha * self.nb_topics) - \
+            self.nb_topics * loggamma(self.alpha) - loggamma(gamma_sum)
 
-        term_2 = 0.0
+        for i in range(self.nb_topics):
+            likelihood += (self.alpha - 1) * (dig_gamma[i] - dig_gamma_sum) + \
+                loggamma(gamma_doc[i]) - (gamma_doc[i] - 1) * (dig_gamma[i] - dig_gamma_sum)
 
-        for i in range(nb_d_words_doc):
-            for j in range(self.nb_topics):
-                term_2 += phi[i][j] * (dig_gamma[j] - dig_gamma_sum)
+            for j in range(nb_d_words_doc):
+                if phi[j][i] > 0:
+                    likelihood += self.bow[doc_idx][j][1] * (phi[j][i] * (dig_gamma[i] - dig_gamma_sum) - np.log(phi[j][i]))\
+                        + self.beta[i][self.bow[doc_idx][j][0]]
 
-        term_2 = np.sum(term_2)
-
-        term_3 = 0.0
-
-        for i in range(nb_d_words_doc):
-            for j in range(self.nb_topics):
-                for k in range(self.nb_terms):
-                    if self.check_word_id_in_doc(k, doc_idx) and self.beta[j][k] != 0:
-                        term_3 += phi[i][j] * np.log(self.beta[j][k])
-
-        term_4 = loggamma(np.sum(gamma_doc)) + np.sum(loggamma(gamma_doc)) -\
-            np.sum((gamma_doc - 1) * (digamma(gamma_doc) - digamma(np.sum(gamma_doc))))
-
-        term_5 = np.sum(np.where(phi <= 0, 0, phi * np.log(phi)))
-
-        return term_1 + term_2 + term_3 - term_4 - term_5
+        return likelihood
 
 
 if __name__ == "__main__":
@@ -296,13 +294,13 @@ if __name__ == "__main__":
     """
     from sklearn.datasets import fetch_20newsgroups
 
-    train = fetch_20newsgroups(subset='test', remove=('headers', 'footers', 'quotes'))
+    train = fetch_20newsgroups(subset='train', remove=('headers', 'footers', 'quotes'))
 
     pp = Preprocessing()
 
-    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:100]))
+    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:1000]))
 
-    lda = LDA(10, bow, index, alpha=1, set_alpha=True)
+    lda = LDA(8, bow, index, alpha=1, set_alpha=True)
 
     print(lda.nb_terms)
 

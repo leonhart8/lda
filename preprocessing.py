@@ -54,6 +54,7 @@ class Preprocessing():
         Builds a bow of each doc from the processed corpus
         """
         d = gensim.corpora.Dictionary(proc_corpus)
+        d.filter_extremes(no_below=15, no_above=0.1, keep_n= 100000)
         bow = [d.doc2bow(doc) for doc in proc_corpus]
         return d, bow
 
