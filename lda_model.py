@@ -93,7 +93,7 @@ class LDA():
         return cpt_words, cpt_d_words
             
 
-    def estimation(self, em_threshold=1e-5, e_threshold=1e-8, max_iter=None):
+    def estimation(self, em_threshold=1e-5, e_threshold=1e-8, max_iter_em=None, max_iter_var=None):
         """
         Estimation of the alpha and beta parameters of the LDA model
         Uses a EM algorithm which functions the following way :
@@ -104,12 +104,20 @@ class LDA():
         has_converged = False 
         nb_iter = 0
 
+        #Initialize sufficient statistics and parameters
+        for i in range(self.nb_topics):
+            for j in range(self.nb_terms):
+                self.topic_word[i][j] += 1 / self.nb_terms + np.random.uniform(0)
+                self.topic_tot[i] += self.topic_word[i][j]
+
+        self.optimize_beta_alpha()
+
         #Initializing variational parameters
         gamma = np.zeros((self.nb_docs, self.nb_topics))
         phi = np.zeros((self.nb_docs, self.doc_max_length, self.nb_topics))
 
         #EM algorithm
-        while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
+        while (not has_converged and ((max_iter_em is None) or (nb_iter < max_iter_em))):
 
             print("Iteration:", nb_iter)
             likelihood = 0
@@ -125,24 +133,14 @@ class LDA():
                 if (d % 1000 == 0):
                     print("E-step through", d, "documents")
 
-                ll, _, _ = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=None)
+                ll, _, _ = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=max_iter_var)
 
                 likelihood += ll
 
             #Maximization of the expectation : maximize lower bound of the log likelihood of the variational distribution
             print("M-Step")
 
-            for i in range(self.nb_topics):
-                for j in range(self.nb_terms):
-                    if self.topic_word[i][j] > 0:
-                        self.beta[i][j] = np.log(self.topic_word[i][j]) - np.log(self.topic_tot[i])
-                    else:
-                        self.beta[i][j] = -100
-
-            print(np.exp(self.beta))
-
-            #Estimating alpha with Newton-Raphson
-            #self.alpha = self.nr_alpha()
+            self.optimize_beta_alpha()
 
             if (nb_iter > 0):
                 diff = np.abs((prev_likelihood - likelihood))
@@ -159,6 +157,23 @@ class LDA():
         self.phi = phi
 
         return self.beta, gamma, phi
+
+
+    def optimize_beta_alpha(self):
+        """
+        M step of the EM algorithm : use of the variational parameters to optimize alpha and beta
+        """
+        for i in range(self.nb_topics):
+            for j in range(self.nb_terms):
+                if self.topic_word[i][j] > 0:
+                    self.beta[i][j] = np.log(self.topic_word[i][j]) - np.log(self.topic_tot[i])
+                else:
+                    self.beta[i][j] = -100
+
+        print(np.exp(self.beta))
+
+        #Estimating alpha with Newton-Raphson
+        #self.alpha = self.nr_alpha()
 
 
     def nr_alpha(self):
@@ -193,7 +208,6 @@ class LDA():
 
             nb_iter += 1
 
-        print("new alpha is :", np.exp(log_a))
         return np.exp(log_a)
 
     def inference_doc(self, doc_idx, gamma_doc, phi, conv=10e-8, max_iter=None):
@@ -239,7 +253,7 @@ class LDA():
 
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
 
-            print("document", doc_idx, "likelihood", likelihood, "nb_iter", nb_iter)
+            #print("document", doc_idx, "likelihood", likelihood, "nb_iter", nb_iter)
 
             if nb_iter > 0:
                 diff = np.abs((prev_likelihood - likelihood))
@@ -287,6 +301,24 @@ class LDA():
 
         return likelihood
 
+    
+    def display_word_topic_association(self):
+        """
+        Method used to intepret the learned beta parameter.
+        As a reminder, beta is of size nb_topics * nb_terms and
+        proba(term | topic) = beta[topic][term]
+
+        We shall for each topic find the top 20 words that contribute 
+        to a document being classified as said topic
+        """
+        top_20_per_topic = np.argsort(self.beta * (-1), axis=1)
+        for i in range(self.nb_topics):
+            for j in range(self.nb_terms):
+                if top_20_per_topic[i][j] < 20:
+                    print(self.index[j], end=" ")
+            print()
+
+
 
 if __name__ == "__main__":
     """
@@ -298,10 +330,10 @@ if __name__ == "__main__":
 
     pp = Preprocessing()
 
-    index, bow = pp.build_bow(pp.corpus_preproc(train["data"][:1000]))
+    index, bow = pp.build_bow(pp.corpus_preproc(train["data"]))
 
-    lda = LDA(8, bow, index, alpha=1, set_alpha=True)
+    pre_proc_corp = pp.corpus_preproc(train["data"])
 
-    print(lda.nb_terms)
+    lda = LDA(5, bow, index, alpha=0.1, set_alpha=True)
 
-    lda.estimation()
+    lda.estimation(max_iter_em=100, max_iter_var=10)
