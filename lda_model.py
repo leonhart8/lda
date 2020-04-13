@@ -130,7 +130,7 @@ class LDA():
             print("E-Step")
 
             for d in range(self.nb_docs):
-                if (d % 1000 == 0):
+                if (d % 100 == 0):
                     print("E-step through", d, "documents")
 
                 ll, _, _ = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=max_iter_var)
@@ -170,7 +170,7 @@ class LDA():
                 else:
                     self.beta[i][j] = -100
 
-        print(np.exp(self.beta))
+        #print(np.exp(self.beta))
 
         #Estimating alpha with Newton-Raphson
         #self.alpha = self.nr_alpha()
@@ -334,6 +334,8 @@ if __name__ == "__main__":
 
     pre_proc_corp = pp.corpus_preproc(train["data"])
 
-    lda = LDA(5, bow, index, alpha=0.1, set_alpha=True)
+    lda = LDA(5, bow, index, alpha=1, set_alpha=True)
 
     lda.estimation(max_iter_em=100, max_iter_var=10)
+
+    lda.display_word_topic_association()
