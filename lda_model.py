@@ -31,8 +31,13 @@ class LDA():
         for documents comprised of nb_terms distinct words at maximum
 
         :param nb_topics: int, amount of topics inside corpus of documents
-        :param nb_terms: int, number of distinct terms in total throughout the corpus
+        :param index: an index of words
+        :param bow: a bag of words, a list of lists of tuples containing (key, occurrences)
         :param alpha: a vector of nb_topics concentration parameters of a Dirichlet
+        used to generate theta. High values of alpha means that our prior
+        knowledge indicates that topics are uniformly distributed, low alpha
+        will favor sparse topic multinomials
+        :param set_alpha: if a value of alpha is given by user, must set flag to Trues
 
         :return: LDA model with set fields according to what is said above
         """
@@ -66,16 +71,19 @@ class LDA():
         #Beta parameter as described in paper, a k x V matrix with :
         #   - k topics
         #   - V words
+        #Of note : we are manipulating log probabilities and not
+        #Probabilities themselves, hence the zero values
         self.beta = np.zeros(shape=(nb_topics, self.nb_terms))
 
         #Variational parameters
         self.gamma = None
         self.phi = None
 
-        #Sufficient statistics
+        #Topic word total is necessary for normalizing lines along the beta matrix
+        #Topic count per word is also neessary to updating coefficients of the beta
+        #Matrix using word counts
         self.topic_tot = np.zeros(self.nb_topics)
         self.topic_word = np.zeros((self.nb_topics, self.nb_terms))
-        self.alpha_stat = 0
 
 
     def nb_terms_doc(self, doc_idx):
@@ -99,7 +107,29 @@ class LDA():
         Uses a EM algorithm which functions the following way :
             - E step by computing best variational parameters
             - M step in order to use these parameters to estimate alpha
-            and beta which maximize the expectation of the likelihood
+            and beta which maximize the expectation of the lower bound
+            on the log likelihood
+
+        :param em_threshold: float, if the likelihood varies with a value smaller than this
+        the EM algorithm is stopped
+        :param e_threshold: float, if the likelihood varies with a value smaller than this
+        the E step of the EM algorithm for a document is stopped 
+        :param max_iter: int, maximum number of iterations for the EM algorithm to run
+        :param max_iter_var: int, maximum number of iterations for the algorithm optimizing
+        the variational parameters to run
+
+        :return:
+            - Beta : the k x V matrix containing distributions of words inside each topic
+            - Phi : the M x N x k matrix containing the latent proportions of each word of
+            each document across topics. Phi approximates the latent parameter z, thus for 
+            each line of theta we find the relationship of a word of the document with a topic.
+            - Gamma : the M x k matrix containing the latent proportions of each topic among
+            documents. Gamma is used to approximate the latent variable theta. 
+            Each coefficient in gamma thus represents the proportion of a certain topic inside
+            the document
+
+            Where : k = nb topics, V = nb of distinct words across corpus, M = number of documents
+                    N = maximum amount of distinct words per document
         """
         has_converged = False 
         nb_iter = 0
@@ -107,6 +137,7 @@ class LDA():
         #Initialize sufficient statistics and parameters
         for i in range(self.nb_topics):
             for j in range(self.nb_terms):
+                #Adding a random term for beta to start from somewhere
                 self.topic_word[i][j] += 1 / self.nb_terms + np.random.uniform(0)
                 self.topic_tot[i] += self.topic_word[i][j]
 
@@ -124,7 +155,6 @@ class LDA():
 
             self.topic_tot = np.zeros(self.nb_topics)
             self.topic_word = np.zeros((self.nb_topics, self.nb_terms))
-            self.alpha_stat = 0
 
             #Expectation computation part : optimization of the variational parameters
             print("E-Step")
@@ -133,7 +163,7 @@ class LDA():
                 if (d % 100 == 0):
                     print("E-step through", d, "documents")
 
-                ll, _, _ = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=max_iter_var)
+                ll = self.inference_doc(d, gamma[d], phi[d], conv=e_threshold, max_iter=max_iter_var)
 
                 likelihood += ll
 
@@ -162,61 +192,45 @@ class LDA():
     def optimize_beta_alpha(self):
         """
         M step of the EM algorithm : use of the variational parameters to optimize alpha and beta
+        using maximum likelihood estimation by differentiating the tight lower bound on the log likelihood
+        and setting it to zero.
+
+        Update is done using sufficient statistics computed at the E-step of the algorithm
         """
         for i in range(self.nb_topics):
             for j in range(self.nb_terms):
                 if self.topic_word[i][j] > 0:
                     self.beta[i][j] = np.log(self.topic_word[i][j]) - np.log(self.topic_tot[i])
                 else:
+                    #To avoid computing a log of 0
+                    #Value is completely arbitrary, we were at loss as what to choose
+                    #So we imitated an implementation which chose this value
                     self.beta[i][j] = -100
 
         #print(np.exp(self.beta))
 
         #Estimating alpha with Newton-Raphson
+        #We have given up on this step as the alpha keeps flunking and going to NaN values
         #self.alpha = self.nr_alpha()
-
-
-    def nr_alpha(self):
-        """
-        Linear time Newton-Raphson algorithm as described in the paper
-        Used to optimize the alpha parameter, the parameter of the dirichlet
-        distribution used to generate topic proportions per document.
-
-        The advantage of this implementation of N-R is that it functions in
-        linear time.
-        """
-        init_a = 100
-        nb_iter = 0
-
-        log_a = np.log(init_a)
-        df = self.nb_docs * (self.nb_topics * digamma(self.nb_topics * init_a) - self.nb_topics * digamma(init_a)) + self.alpha_stat
-        d2f = self.nb_docs * ((self.nb_topics ** 2) * polygamma(2, self.nb_topics * init_a) - self.nb_topics * polygamma(2, init_a))
-
-        while (np.abs(df) > 1e-5 and nb_iter < 1000):
-
-            log_a = log_a - df / (d2f * self.alpha + df)
-
-            a = np.exp(log_a)
-            if (np.isnan(a)):
-                print("alpha is NaN, time to reboot it")
-                init_a *= 10
-                a = init_a
-                log_a = np.log(a)
-
-            df = self.nb_docs * (self.nb_topics * digamma(self.nb_topics * a) - self.nb_topics * digamma(a)) + self.alpha_stat
-            d2f = self.nb_docs * ((self.nb_topics ** 2) * polygamma(2, self.nb_topics * a) - self.nb_topics * polygamma(2, a))
-
-            nb_iter += 1
-
-        return np.exp(log_a)
 
     def inference_doc(self, doc_idx, gamma_doc, phi, conv=10e-8, max_iter=None):
         """
         Variational inference algorithm described in the paper
         Uses gamma and phi, two variational parameters used to approximate
         the distribution of the parameters alpha and beta knowing our data (=corpus)
+
         :param self: this LDA model
-        :param doc_id: int, index of the document on which to perform
+        :param doc_idx: int, index of the document on which to perform the inference
+        :param gamma_doc: the gamma variational parameter for the document on which we
+        perform the inference. Gamma is used to approximate the latent variable theta. 
+        Each coefficient in gamma thus represents the proportion of a certain topic inside
+        the document
+        :param phi: the phi variational parameter for the document on which we perform the inference.
+        Phi approximates the latent parameter z, thus for each line of theta we find the relationship
+        of a word of the document with a topic.
+
+        :returns: float, lower bound on the log likelihood for a specific document.
+        Updates sufficient statistics and values of phi and gamma as a side effect.
         """
         has_converged = False
         nb_iter = 0
@@ -231,30 +245,41 @@ class LDA():
             phi[n, :] = 1 / self.nb_topics
         gamma_doc[:] = self.alpha + nb_words_doc / self.nb_topics
 
+        #Storing digamma values to prevent uncessary and redundant digamma computations
         dig_gamma = digamma(gamma_doc)
 
         #Now estimating gamma and phi
         while (not has_converged and ((max_iter is None) or (nb_iter < max_iter))):
 
             for i in range(nb_d_words_doc):
-                phisum = 0
+                #Manipulating phi in log space in order to prevent numerical underflow
+                #Computation of phi normalization constant for this line of phi
+                norm_phi = logsumexp(phi[i])
+
+                #Storing previous value of phi important for gamma update
+                phi_prev = phi[i]
+
+                #Optimizing gamma using the topic multinomials estimated in beta
                 for j in range(self.nb_topics):
-                    phi_prev[j] = phi[i][j]
                     phi[i][j] = dig_gamma[j] + self.beta[j][self.bow[doc_idx][i][0]]
-                    if j > 0:
-                        phisum = logsumexp(np.array([phisum, phi[i][j]]))
-                    else:
-                        phisum = phi[i][j]
+
+                #Normalizing phi and switching from log space to probabilities
+                phi[i] = np.exp(phi[i] - norm_phi)
 
                 for j in range(self.nb_topics):
-                    phi[i][j] = np.exp(phi[i][j] - phisum)
-                    gamma_doc[j] += self.bow[doc_idx][i][1] * (phi[i][j] - phi_prev[j])
-                    dig_gamma[j] = digamma(gamma_doc[j])
 
+                    #Gamma update as specified in the paper
+                    gamma_doc[j] += self.bow[doc_idx][i][1] * (phi[i][j] - phi_prev[j])
+                
+                #Updating values of digamma of gamma
+                dig_gamma = digamma(gamma_doc)
+
+            #Computing lower bound on the log likelihood
             likelihood = self.likelihood(doc_idx, nb_d_words_doc, gamma_doc, phi)
 
             #print("document", doc_idx, "likelihood", likelihood, "nb_iter", nb_iter)
 
+            #Convergence criteria
             if nb_iter > 0:
                 diff = np.abs((prev_likelihood - likelihood))
                 if diff < conv:
@@ -264,21 +289,31 @@ class LDA():
 
             nb_iter += 1
 
-        #Sufficient statistics update
-        self.alpha_stat += (np.sum(digamma(gamma_doc)))
-        self.alpha_stat -= self.nb_topics * digamma(np.sum(gamma_doc))
-
+        #Updating the sufficient statistics, namely :
+        #   - The occurrences of words per topic estimated during the inference phase
+        #   this will come in handy during the update of Beta to have directly the counts
+        #   of words per topic inside documents
+        #   - The total occurrence of words inside a topic, necessary for normalizing multinomials
+        #   accross lines of the beta matrix
         for i in range(nb_d_words_doc):
             for j in range(self.nb_topics):
                 self.topic_word[j][self.bow[doc_idx][i][0]] += phi[i][j] * self.bow[doc_idx][i][1]
                 self.topic_tot[j] += self.bow[doc_idx][i][1] * phi[i][j]
 
-        return likelihood, phi, gamma_doc
+        return likelihood
 
 
     def likelihood(self, doc_idx, nb_d_words_doc, gamma_doc, phi):
         """
         Computation of the likelihood lower bound as described in the paper
+
+        :param doc_idx: the document on which the lower bound of the log
+        likelihood is computed
+        :param nb_d_words_doc: the number of distinct words in the document
+        :param gamma_doc: variational parameter gamma for this document
+        :param phi: variational parameter phi for this document
+
+        :return: float, the lower bound on the log likelihood for this document
         """
         likelihood = 0.0
         
@@ -290,10 +325,11 @@ class LDA():
         likelihood = loggamma(self.alpha * self.nb_topics) - \
             self.nb_topics * loggamma(self.alpha) - loggamma(gamma_sum)
 
-        for i in range(self.nb_topics):
-            likelihood += (self.alpha - 1) * (dig_gamma[i] - dig_gamma_sum) + \
-                loggamma(gamma_doc[i]) - (gamma_doc[i] - 1) * (dig_gamma[i] - dig_gamma_sum)
+        
+        likelihood += np.sum((self.alpha - 1) * (dig_gamma - dig_gamma_sum) + \
+            loggamma(gamma_doc) - (gamma_doc - 1) * (dig_gamma - dig_gamma_sum))
 
+        for i in range(self.nb_topics):
             for j in range(nb_d_words_doc):
                 if phi[j][i] > 0:
                     likelihood += self.bow[doc_idx][j][1] * (phi[j][i] * (dig_gamma[i] - dig_gamma_sum) - np.log(phi[j][i]))\
@@ -332,9 +368,7 @@ if __name__ == "__main__":
 
     index, bow = pp.build_bow(pp.corpus_preproc(train["data"]))
 
-    pre_proc_corp = pp.corpus_preproc(train["data"])
-
-    lda = LDA(5, bow, index, alpha=1, set_alpha=True)
+    lda = LDA(5, bow, index, alpha=0.1, set_alpha=True)
 
     lda.estimation(max_iter_em=100, max_iter_var=10)
 

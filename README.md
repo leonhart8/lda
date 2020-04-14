@@ -27,3 +27,14 @@ $ python3 preprocessing.py
 It launches the preprocessing pipeline on the newsgroup dataset and shows a few aspects of it.
 
 Aside from that a notebook is available which gives a few details on the model and provides an illustrated.
+The documentation of each function also provides plenty of details on how they are implemented. Docstrings
+can be found throughout the modules.
+
+# TO DO
+
+- Implement the newton raphson algorithm for alpha optimization
+
+- Optimize the algorithm further by dropping the for loops using vectoriation and dropping the amount
+of calls to digamma
+
+- Better improve the methods to interpret results
